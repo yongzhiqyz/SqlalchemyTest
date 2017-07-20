@@ -11,6 +11,7 @@ users = Table('users', metadata,
     Column('name', String(40)),
     Column('age', Integer),
 )
+users.drop()
 users.create()
 
 emails = Table('emails', metadata,
@@ -18,6 +19,7 @@ emails = Table('emails', metadata,
     Column('address', String),
     Column('user_id', Integer, ForeignKey('users.user_id')),
 )
+emails.drop()
 emails.create()
 
 i = users.insert()
