@@ -1,11 +1,8 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, func, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm import aliased
-from sqlalchemy import text
-from sqlalchemy import func
-
+from sqlalchemy import Column, Integer, String, Text, Table
+from sqlalchemy.orm import sessionmaker, relationship, aliased, subqueryload, contains_eager, joinedload
+from sqlalchemy.sql import func, exists
 
 
 engine = create_engine('sqlite:///:memory:', echo=True)
@@ -19,88 +16,261 @@ class User(Base):
          fullname = Column(String)
          password = Column(String)
          def __repr__(self):
-             return "<User(name='%s', fullname='%s', password='%s')>" % (
-                                 self.name, self.fullname, self.password)
+             return "<User(name='%s', fullname='%s', password='%s')>" % (self.name, self.fullname, self.password)
+
+class Address(Base):
+         __tablename__ = 'addresses'
+         id = Column(Integer, primary_key=True)
+         email_address = Column(String, nullable=False)
+#         family_address = Column(String, nullable=False)
+         user_id = Column(Integer, ForeignKey('users.id'))
+         user = relationship("User", back_populates="addresses")
+         def __repr__(self):
+             return "<Address(email_address='%s')>" % self.email_address
 
 
-print User.__tablename__
+User.addresses = relationship("Address", order_by=Address.id, back_populates="user")             
 
 Base.metadata.create_all(engine)
-ed_user = User(name='ed', fullname='Ed Jones', password='edspassword')
 
 Session = sessionmaker(bind=engine)
 session = Session()
-session.add(ed_user)
 
-our_user = session.query(User).filter_by(name='ed').first()
-print our_user.name, our_user.fullname, our_user.password
 
-print ed_user is our_user
+jack = User(name='jack', fullname='Jack Bean', password='gjffdd')
 
-user1=User(name='wendy', fullname='Wendy Williams', password='foobar')
-user2=User(name='mary', fullname='Mary Contrary', password='xxg527')
-user3=User(name='fred', fullname='Fred Flinstone', password='blah')
+print jack.addresses
 
-session.add_all([
-        user1,
-        user2,
-        user3])
-ed_user.password = 'f8s7ccs'
-print '======dirty data0:    ', session.dirty
-print '======new data0:    ', session.new
-#our_user = session.query(User)
-#print '======The number:  ', our_user.count()
-user1.password = '1234'
-print  '======dirty data1:    ', session.dirty
-print '======new data1:    ', session.new 
+jack.addresses = [Address(email_address='jack@google.com'), Address(email_address='j25@yahoo.com')]
+#jack.addresses = [Address(family_address='jack@google.com'), Address(family_address='j25@yahoo.com')]
 
-for instance in session.query(User).order_by(User.id):
-         print (instance.name, instance.fullname)
+print '-------------------------------------------'
+print jack.addresses
+print ('-----email_address-----', jack.addresses[1].email_address)
 
-for name, fullname in session.query(User.name, User.fullname):
-         print(name, fullname)
+session.add(jack)
+session.commit()
+jack = session.query(User).filter_by(name='jack').one()
+print ('-----user.id------', jack.addresses[1].user_id)
+ad=session.query(Address).first()
+print ad.email_address
 
-for fullname in session.query(User.fullname):
-         print(fullname)
-full_name = session.query(User.fullname)
-print '=========',full_name.count()
-print '=========', session.query(User.fullname).count()
+for u, a in session.query(User, Address).filter((User.id==Address.user_id) & (Address.email_address=='jack@google.com')).all():
+#for u, a in session.query(User, Address).filter(User.id==Address.user_id).filter(Address.email_address=='jack@google.com').all():
+    print ('----User--------', u)
+    print ('----Address-----', a)
 
-for row in session.query(User, User.name).all():
-        print(row.User, row.name)
+for u in session.query(User).join(Address).\
+             filter(Address.email_address=='jack@google.com').\
+             all():
+    print ('-----User-------', u)
+          
+adalias1 = aliased(Address)
+adalias2 = aliased(Address)
+for username, email1, email2 in \
+     session.query(User.name, adalias1.email_address, adalias2.email_address).\
+     join(adalias1, User.addresses).\
+     join(adalias2, User.addresses).\
+     filter(adalias1.email_address=='jack@google.com').\
+     filter(adalias2.email_address=='j25@yahoo.com'):
+     print  ('----username, email1, email2-----', username, email1, email2)
+stmt = session.query(Address.user_id, func.count('*').\
+                     label('address_count')).\
+                     group_by(Address.user_id).subquery()
 
-for row in session.query(User.name.label('name_label')).all():
-        print(row.name_label)
+for u, count in session.query(User, stmt.c.address_count).\
+         outerjoin(stmt, User.id==stmt.c.user_id).order_by(User.id):
+             print ('------u, count-----', u, count)
 
-user_alias = aliased(User, name='user_alias')
-for row in session.query(user_alias, user_alias.name).all():
-        print(row.user_alias)
+stmt = session.query(Address).\
+                 filter(Address.email_address != 'j25@yahoo.com').\
+                 subquery()
+adalias = aliased(Address, stmt)
+for user, address in session.query(User, adalias).\
+        join(adalias, User.addresses):
+     print('----user    ------', user)
+     print('----address------', address)
 
-for u in session.query(User).order_by(User.id)[1:3]:
-        print(u)
+stmt = exists().where(Address.user_id==User.id)
+for name, in session.query(User.name).filter(stmt):
+    print('---name-----', name)
 
-for name, in session.query(User.name).filter_by(fullname='Ed Jones'):
-        print(name)
-for name, in session.query(User.name).filter(User.fullname=='Ed Jones'):
-        print(name)
+for name, in session.query(User.name).\
+        filter(User.addresses.any()):
+    print('-----name------', name)
 
-for user in session.query(User).filter(User.name=='ed').filter(User.fullname=='Ed Jones'):
-        print(user)
+for name, in session.query(User.name).\
+    filter(User.addresses.any(Address.email_address.like('%google%'))):
+    print('-----name------', name)
 
-print '===1=====', session.query(User.name).filter(User.name.in_(
-        session.query(User.name).filter(User.name.like('%ed%'))))
+session.query(Address).\
+        filter(~Address.user.has(User.name=='jack')).all()
 
-query = session.query(User).filter(User.name.like('%ed')).order_by(User.id)
-print query.all()
-print query.first()
-#user = query.one()
-#print user
-for user in session.query(User).filter(text("id<224")).order_by(text("id")).all():
-    print(user.name)
+jack = session.query(User).\
+                options(subqueryload(User.addresses)).\
+                filter_by(name='jack').one()
 
-session.query(func.count(User.name), User.name).group_by(User.name).all()
+jack = session.query(User).\
+                      options(joinedload(User.addresses)).\
+                      filter_by(name='jack').one()
 
-session.query(func.count('*')).select_from(User).scalar()
+
+jacks_addresses = session.query(Address).\
+                             join(Address.user).\
+                             filter(User.name=='jack').\
+                             options(contains_eager(Address.user)).\
+                             all()
+
+print ('------jacks-address-------', jacks_addresses)
+
+print '--------------------------------------------------------'
+session.delete(jack)
+session.query(User).filter_by(name='jack').count()
+
+print '--------------------------------------------------------'
+print session.query(Address).filter(
+     Address.email_address.in_(['jack@google.com', 'j25@yahoo.com'])).count()
+
+session.close()
+
+
+print '----------------------New----------------------------'
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    fullname = Column(String)
+    password = Column(String)
+
+    addresses = relationship("Address", back_populates='user',
+                       cascade="all, delete, delete-orphan")
+
+    def __repr__(self):
+        return "<User(name='%s', fullname='%s', password='%s')>" % (
+                            self.name, self.fullname, self.password)
+
+class Address(Base):
+     __tablename__ = 'addresses'
+     id = Column(Integer, primary_key=True)
+     email_address = Column(String, nullable=False)
+     user_id = Column(Integer, ForeignKey('users.id'))
+     user = relationship("User", back_populates="addresses")
+
+     def __repr__(self):
+         return "<Address(email_address='%s')>" % self.email_address
+
+jack = session.query(User).get(1)
+print ('--------jack---------', jack)
+del jack.addresses[1]
+session.query(Address).filter(
+     Address.email_address.in_(['jack@google.com', 'j25@yahoo.com'])).count()
+
+print '----------------------------------------------'
+session.delete(jack)
+print ('----User-------', session.query(User).filter_by(name='jack').count())
+print ('----Address----', session.query(Address).filter(
+    Address.email_address.in_(['jack@google.com', 'j25@yahoo.com'])).count())
+
+post_keywords = Table('post_keywords', Base.metadata,
+                      Column('post_id', ForeignKey('posts.id'), primary_key=True),
+                      Column('keyword_id', ForeignKey('keywords.id'), primary_key=True)
+)
+
+class BlogPost(Base):
+     __tablename__ = 'posts'
+
+     id = Column(Integer, primary_key=True)
+     user_id = Column(Integer, ForeignKey('users.id'))
+     headline = Column(String(255), nullable=False)
+     body = Column(Text)
+
+     # many to many BlogPost<->Keyword
+     keywords = relationship('Keyword',
+                             secondary=post_keywords,
+                             back_populates='posts')
+
+     def __init__(self, headline, body, author):
+         self.author = author
+         self.headline = headline
+         self.body = body
+
+     def __repr__(self):
+         return "BlogPost(%r, %r, %r)" % (self.headline, self.body, self.author)
+
+
+class Keyword(Base):
+     __tablename__ = 'keywords'
+
+     id = Column(Integer, primary_key=True)
+     keyword = Column(String(50), nullable=False, unique=True)
+     posts = relationship('BlogPost',
+                          secondary=post_keywords,
+                          back_populates='keywords')
+
+     def __init__(self, keyword):
+         self.keyword = keyword
+
+BlogPost.author = relationship(User, back_populates="posts")
+User.posts = relationship(BlogPost, back_populates="author", lazy="dynamic")
+
+
+Base.metadata.create_all(engine)
+
+
+print ('----------create new engine------------')
+wendy = session.query(User).\
+                 filter_by(name='wendy').\
+                 first()
+print ('-------wendy-------', wendy)
+post = BlogPost("Wendy's Blog Post", "This is a test", wendy)
+session.add(post)
+
+post.keywords.append(Keyword('wendy'))
+post.keywords.append(Keyword('firstpost'))
+
+session.query(BlogPost).\
+             filter(BlogPost.keywords.any(keyword='firstpost')).\
+             all()
+print ('------wendy-----', session.query(BlogPost).\
+             filter(BlogPost.author==wendy).\
+             filter(BlogPost.keywords.any(keyword='firstpost')).\
+             all())
+
+
+#wendy.posts.\
+#         filter(BlogPost.keywords.any(keyword='firstpost')).\
+#         all()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
